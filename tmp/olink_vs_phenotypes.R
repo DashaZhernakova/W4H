@@ -404,12 +404,13 @@ dev.off()
 
 plot_pheno_prot_by_tp(d_wide, pheno_tp, 'HK2', 'CaloriesGR')
 
+
 #
 # Functions
 #
 
 
-regression_olink_pheno <- function(joined_data, prot, ph, scale = F){
+regression_olink_pheno <- function(joined_data, prot, ph, scale = F, kw = F){
   d <- na.omit(joined_data[,c("ID", prot, ph)])
   colnames(d) <- c("SampleID", "prot", "pheno")
   is_factor <- length(unique(d$pheno)) < 3
@@ -422,10 +423,18 @@ regression_olink_pheno <- function(joined_data, prot, ph, scale = F){
     d$prot <- scale(d$prot)
     if (! is_factor) d$pheno <- scale(d$pheno)
   }
-  
-  lm_fit <- lm(prot ~ pheno, data = d)
-  coef <- summary(lm_fit)$coefficients
-  return(list("pval" = coef[2,4], "est" = coef[2,1], "n" = nrow(d)))
+  b <- NA
+  pval <- NA
+  if (! kw || ! is_factor){
+    lm_fit <- lm(prot ~ pheno, data = d)
+    pval <- summary(lm_fit)$coefficients[2,4]
+    b <- summary(lm_fit)$coefficients[2,1]
+    
+  } else if (is_factor) {
+    pval <- kruskal.test(prot ~ pheno, data=d)$p.value
+    b <- NA
+  }
+  return(list("pval" = pval, "est" = b, "n" = nrow(d)))
 }
 
 
@@ -563,35 +572,6 @@ run_permutation_adjustment <- function(pheno_0, prot_df, correl_res, p_cutoff = 
   close(pb)
   return(correl_res_subs)
 }
-
-
-# Storey q
-
-correl_res2 <- data.frame()
-for (ph in colnames(pheno_0)[2:ncol(pheno_0)]) {
-  permuted_est <- data.frame(matrix(NA, ncol = num_permutations, nrow = ncol(d_wide_1) -1))
-  rownames(permuted_est) <- colnames(d_wide_1)[2:ncol(d_wide_1)]
-  
-  for (i in 1:num_permutations) {
-    permuted_pheno <- pheno_0
-    permuted_pheno$Patient_id <- sample(pheno_0$Patient_id) # shuffle ids
-    joined_perm <- left_join(d_wide_1, permuted_pheno, by = c("ID" = "Patient_id"))
-    
-    # Re-run the linear models with permuted phenotypes
-    for (prot in colnames(d_wide_1)[2:ncol(d_wide_1)]){
-      res <- regression_olink_pheno(joined_perm, prot, ph)
-      permuted_est[prot, i] <- res[['est']]
-    }
-  }
-  obs_stats <- correl_res[correl_res$pheno == ph, ]
-  null_stats <- as.matrix(permuted_est[obs_stats$prot,])
-
-  pvalues <- empPvals(stat = abs(obs_stats$r), stat0 = abs(null_stats))
-  qobj <- qvalue(p = pvalues)
-  
-  correl_res2 <- rbind(correl_res2, cbind(obs_stats, qobj$qvalues))
-}
-
 
 
 

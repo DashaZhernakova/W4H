@@ -97,27 +97,14 @@ gls_fit3$coefficients
 
 
 prot = 'CHRDL2'
-get_simplified_coefs <- function(d_wide, prot, scale = T){
+ 
 
-  d_subs <- d_wide[,c("ID", "TP", prot)]
-  colnames(d_subs) <- c("ID", "TP", "prot")
-  d_subs$TP <- as.numeric(d_subs$TP)
-  d_subs <- na.omit(d_subs)
+prot_simp <- data.frame(matrix(nrow = length(all_prots) , ncol = 3))
+row.names(prot_simp) <- all_prots
 
-  if (scale) d_subs$prot <- scale(d_subs$prot)
+for (prot in all_prots){
+  prot_simp[prot,] <- get_simplified_coefs(d_wide, prot)
+}
 
-  gls_fit <- gls(prot ~ poly(TP, 3), data = d_subs, correlation = corSymm(form = ~ TP | ID))
-  coefs <- gls_fit$coefficients
-  
-  coefs <- coefs[2,3,4]
-  coefs[coefs > 2] <- 3
-  coefs[coefs < -2] <- -3
-  
-  coefs[coefs > 1 & coefs < 2] <- 2
-  coefs[coefs < -1 & coefs > -2] <- -2
-  
-  coefs[coefs < 1 & coefs > 0 ] <- 1
-  coefs[coefs > -1 & coefs < 0 ] <- -1
-  
-  return(coefs)
-} 
+ggplot(d_subs, aes(x = TP, y = prot)) + geom_jitter(width = 0.2, alpha = 0.4) + geom_line(aes(y = predict(gls_fit))) + theme_bw()
+
