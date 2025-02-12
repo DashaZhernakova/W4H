@@ -486,7 +486,11 @@ regress_covariates <- function(data, covariates){
     
     covariates <- na.omit(covariates)
     row.names(covariates) <- covariates$ID
-    covariates$ID <- NULL
+    if (colnames(covariates)[1] == 'ID' && ncol(covariates) == 2) {
+      covariates <- covariates[,-1,drop = F] 
+    } else {
+      covariates$ID <- NULL
+    }
     
     ids <- intersect(row.names(covariates), row.names(data_tp))
     data_tp <- data_tp[ids,]

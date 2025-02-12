@@ -5,7 +5,7 @@ library(ReactomePA)
 
 hs <- org.Hs.eg.db
 hs_msigdb_df <- msigdbr(species = "Homo sapiens")
-prot_names <- read.delim("olink_protein_names.txt", sep = "\t", as.is = T, check.names = F)
+prot_names <- read.delim("data/olink_protein_names.txt", sep = "\t", as.is = T, check.names = F)
 
 #lmm_res_prot_tp <- read.delim("../results/prot_vs_tp_poly3_lmm_adj_age_bmi_preg_storage.txt", sep = "\t", as.is = T, check.names = F)
 
@@ -14,52 +14,71 @@ prot_names <- read.delim("olink_protein_names.txt", sep = "\t", as.is = T, check
 
 plot_list <- list()
 
-input_data <- as.data.frame(pheno_dist)
-input_data$eucl_coef_similarity <- 1 / (1 + input_data$eucl_coef)
-input_data$eucl_similarity <- 1 / (1 + input_data$eucl)
-fold_change <- 'eucl_similarity'
-fold_change <- 'eucl_coef_similarity'
+#input_data <- as.data.frame(pheno_dist)
+#input_data$eucl_coef_similarity <- 1 / (1 + input_data$eucl_coef)
+#input_data$eucl_similarity <- 1 / (1 + input_data$eucl)
+#fold_change <- 'eucl_similarity'
+#fold_change <- 'eucl_coef_similarity'
+
+input_data <- gam_res_lin 
+#fold_change <- "est_spline"
+fold_change <- "est_noTP"
+
+
 #input_data <- lmm_res
 #fold_change <- 'tval'
 enrichment_res <- data.frame()
+plot_list <- list()
 for (ph in unique(input_data$pheno)){
   cat(ph, "\n")
   subs <- input_data[input_data$pheno == ph, c("prot", fold_change)]
 
   enrich_res <- run_enrichment_analysis(subs)
 
+  gse_res <- data.frame()
+  kegg_res <- data.frame()
+  rea_res <- data.frame()
+  
+  if (nrow(enrich_res[['gse']]@result) > 0){
   if ("ONTOLOGY" %in% colnames(enrich_res[['gse']]@result)) { 
     gse_res <-  as_tibble(enrich_res[['gse']]@result)
   } else {
     gse_res <- cbind(data.frame("ONTOLOGY" = "BP"), as_tibble(enrich_res[['gse']]@result))
   }
-  kegg_res <- cbind(data.frame("ONTOLOGY" = "KEGG"), as_tibble(enrich_res[['kegg']]@result))
-  rea_res <- cbind(data.frame("ONTOLOGY" = "Reactome"), as_tibble(enrich_res[['reactome']]@result))
-  combined_res <- rbind(gse_res, kegg_res)
+  } 
+  if (nrow(enrich_res[['kegg']]@result) > 0) kegg_res <- cbind(data.frame("ONTOLOGY" = "KEGG"), as_tibble(enrich_res[['kegg']]@result))
+  
+  if (nrow(enrich_res[['reactome']]@result) > 0) rea_res <- cbind(data.frame("ONTOLOGY" = "Reactome"), as_tibble(enrich_res[['reactome']]@result))
+  
+  combined_res <- rbind(gse_res, kegg_res, rea_res)
   enrichment_res <- rbind(enrichment_res, cbind(data.frame("Phenotype" = ph), combined_res))
-  plot_list[[ph]] <- dotplot(enrich_res[['gse']], showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle(ph) + theme(axis.text.y=element_text(size=8))
-  plot_list[[paste0(ph, "_kegg")]] <- dotplot(enrich_res[['kegg']], showCategory=10, split=".sign") + facet_grid(.~.sign)
-  plot_list[[paste0(ph, "_reactome")]] <- dotplot(enrich_res[['reactome']], showCategory=10, split=".sign") + facet_grid(.~.sign)
+  tryCatch({
+    plot_list[[ph]] <- dotplot(enrich_res[['gse']], showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle(ph) + theme(axis.text.y=element_text(size=8))
+    plot_list[[paste0(ph, "_kegg")]] <- dotplot(enrich_res[['kegg']], showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle(paste(ph, " KEGG"))
+    plot_list[[paste0(ph, "_reactome")]] <- dotplot(enrich_res[['reactome']], showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle(paste(ph, " Reactome"))
+  }, error = function(e) {
+    message("No results: ", conditionMessage(e))
+  })
 }
 
-#pdf("../plots/enrichment_lmm_res_tp_cubic.pdf", height = 20, width = 25)
-#grid.arrange(grobs = plot_list, ncol = 6, nrow = 5)  
-#dev.off()
+pdf(paste0(out_basedir,"/plots/enrichment_prot_vs_pheno_linear_noTP_gam.pdf"), height = 15, width = 15)
+grid.arrange(grobs = plot_list, ncol = 3, nrow = 3)  
+dev.off()
 
 #write.table(enrichment_res, file = "../results/prot_vs_pheno_withTP_lmm_adj_covar_enrichment_results.txt", quote = F, sep = "\t", row.names = FALSE)
-write.table(enrichment_res, file = "../results/prot_vs_pheno_eucl_dist_GO_KEGG_enrichment_results.txt", quote = F, sep = "\t", row.names = FALSE)
-
+write.table(enrichment_res, file = paste0(out_basedir,"prot_vs_pheno_linear_no_TP_gam_GO_KEGG_enrichment_results.txt"), quote = F, sep = "\t", row.names = FALSE)
 
 
 # msigdb
-fold_change <- "eucl_coef_similarity"
-fold_change <- 'eucl_similarity'
+#fold_change <- "eucl_coef_similarity"
+#fold_change <- 'eucl_similarity'
 enrichment_res <- data.frame()
 
 for (ph in unique(input_data$pheno)){
   cat(ph, "\n")
-  subs <- input_data[input_data$pheno == ph & input_data$signif_tp == T, c("prot", fold_change)]
-
+  #subs <- input_data[input_data$pheno == ph & input_data$signif_tp == T, c("prot", fold_change)]
+  subs <- input_data[input_data$pheno == ph, c("prot", fold_change)]
+  
   for (cat in c('H', 'C2', 'C5')){
     enrich_res <- run_enrichment_analysis_msigdb(subs, cat)
     #enrich_res <- run_overrepresentation_analysis_msigdb(subs, cat)
@@ -69,7 +88,7 @@ for (ph in unique(input_data$pheno)){
   }
 }
 
-write.table(enrichment_res, file = "../results/prot_signif_vs_pheno_eucl_coef_dist_msigdb_enrichment_results.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(enrichment_res, file = paste0(out_basedir,"prot_vs_pheno_linear_noTP_gam_msigdb_enrichment_results.txt"), quote = F, sep = "\t", row.names = FALSE)
 
 
 ### Functions
@@ -88,7 +107,7 @@ add_entrez_uniprot_ids <- function(subs) {
   # keep only BNP and remove NT-proBNP (as the gene is the same)
   df_for_enrich <- df_for_enrich[df_for_enrich$prot != "NT-proBNP", ] 
   
-  entrez_ids <- select(hs, 
+  entrez_ids <- AnnotationDbi::select(hs, 
                        keys = df_for_enrich$gene,
                        columns = c("ENTREZID", "SYMBOL"),
                        keytype = "SYMBOL")
@@ -119,13 +138,13 @@ run_enrichment_analysis <- function(subs){
                verbose = F, 
                OrgDb = hs, 
                pAdjustMethod = "BH", 
-               pvalueCutoff = 1,
+               pvalueCutoff = 0.1,
                scoreType = scoretype)
 
   gse_res <-  as_tibble(gse@result)
   
   gse_rea <- gsePathway(gene_list, 
-                        pvalueCutoff = 1,
+                        pvalueCutoff = 0.1,
                         pAdjustMethod = "BH", 
                         verbose = FALSE,
                         scoreType = scoretype)
@@ -141,7 +160,7 @@ run_enrichment_analysis <- function(subs){
                  keyType = "uniprot", 
                  verbose = F, 
                  pAdjustMethod = "BH", 
-                 pvalueCutoff = 1,
+                 pvalueCutoff = 0.1,
                  scoreType = scoretype)
   
   
@@ -167,8 +186,8 @@ run_enrichment_analysis_msigdb <- function(subs, cat = 'H'){
   em <- GSEA(gene_list, 
               TERM2GENE = msigdb_subset_genes, 
               scoreType = "pos", 
-              pvalueCutoff = 0.05,
-              pAdjustMethod = "none",
+              pvalueCutoff = 0.1,
+              pAdjustMethod = "BH",
               verbose = F)
   em <- dplyr::left_join(as_tibble(em@result), msigdb_subset_descr, by = c("ID" = "gs_name"))
 
@@ -179,6 +198,19 @@ run_enrichment_analysis_msigdb <- function(subs, cat = 'H'){
 ###############################################################################
 # Overrepresentation analysis
 ###############################################################################
+
+gam_res_prot_tp <- read.delim(paste0(out_basedir, "prot_vs_tp_gam_adj_age_bmi_preg_storage.txt"), as.is = T, sep = "\t")
+
+tmp <- add_entrez_uniprot_ids(gam_res_prot_tp)
+
+for (cl in unique(tmp$trajectory_cluster)){
+  signif_genes <- na.omit(tmp[tmp$trajectory_cluster == cl, "entrez"])
+  background_genes <- na.omit(tmp[tmp$gam_BH_pval < 0.05, "entrez"])
+  if(length(signif_genes) < 10) next
+  res <- run_overrepresentation_analysis(signif_genes, background_genes)
+  if (nrow(res) > 0) print(cl)
+}
+
 genename_to_entrez <- function(gene_names){
   entrez_ids <- select(hs, 
                        keys = gene_names,
@@ -196,18 +228,18 @@ hs_df_reactome <- hs_msigdb_df %>%
     gs_subcat == "CP:REACTOME"
   )
 
-run_overrepresentation_analysis <- function(subs, col_name = 'BH_pval', threshold = 0.05){
+run_overrepresentation_analysis <- function(signif_genes, background_genes, pval_threshold = 0.05){
 
-  df_for_enrich <- add_entrez_uniprot_ids(subs)
+  #df_for_enrich <- add_entrez_uniprot_ids(subs)
   
-  signif_genes <- df_for_enrich[df_for_enrich[,col_name] < threshold , 'entrez']
-  background_genes <- df_for_enrich$entrez
+  #signif_genes <- df_for_enrich[df_for_enrich[,col_name] < threshold , 'entrez']
+  #background_genes <- df_for_enrich$entrez
 
   if (length(signif_genes) < 10) return(NULL)
 
   enrich_res_kegg <- enricher(
     gene = signif_genes, # A vector of your genes of interest
-    pvalueCutoff = pval_threshold, # Can choose a FDR cutoff
+    pvalueCutoff = 0.1, # Can choose a FDR cutoff
     pAdjustMethod = "BH", # Method to be used for multiple testing correction
     universe = background_genes,
     TERM2GENE = dplyr::select(
@@ -218,7 +250,7 @@ run_overrepresentation_analysis <- function(subs, col_name = 'BH_pval', threshol
   
   enrich_res_reactome <- enricher(
     gene = signif_genes, # A vector of your genes of interest
-    pvalueCutoff = pval_threshold, # Can choose a FDR cutoff
+    pvalueCutoff = 0.1, # Can choose a FDR cutoff
     pAdjustMethod = "BH", # Method to be used for multiple testing correction
     universe = background_genes,
     TERM2GENE = dplyr::select(

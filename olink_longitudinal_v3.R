@@ -1,7 +1,7 @@
 
 my_colors <- c("#eddb6d", "#ed9f47", "#4b9aaf", "#3a6887")
-setwd("/Users/Dasha/work/Sardinia/W4H/olink/data/")
-source("../scripts/traj_functions.R")
+setwd("/Users/Dasha/work/Sardinia/W4H/olink/")
+source("scripts/utility_functions.R")
 
 library(ggplot2)
 library(rmcorr)
@@ -12,21 +12,11 @@ library(gridExtra)
 library(pheatmap)
 library(corrplot)
 
-pheno <- read.delim("../../phenotypes/blood_pheno_03102024_log.txt", as.is = T, check.names = F, sep = "\t")
-d_wide <- read.delim("olink_clean_CVD+INF.txt", as.is = T, check.names = F, sep = "\t")
-d_long <- read.delim("olink_clean_CVD+INF_long.txt", as.is = T, check.names = F, sep = "\t")
-covariates <- read.delim("../data/covariates_age_bmi_storage_preg.txt", sep = "\t", check.names = F, as.is = T, colClasses = c(ID = "character"))
+out_basedir <- "results/pheno_batch2_prot_rm_outliers_5sd/"
+d_wide <- read.delim("data/olink_clean_CVD+INF_rm_outliers_5sd.txt", as.is = T, check.names = F, sep = "\t", colClasses = c(ID = "character"))
+covariates <- read.delim("data/covariates_age_bmi_storage_preg.txt", sep = "\t", check.names = F, as.is = T, colClasses = c(ID = "character"))
 
-ID <- gsub("_.*", "", d_wide$SampleID)
-TP <- gsub(".*_", "", d_wide$SampleID)
-
-d_wide <- cbind(ID, TP, d_wide)
-#d_wide$SampleID <- NULL
-
-pheno$Record.ID <- gsub("ID_", "", pheno$Record.ID)
-colnames(pheno)[1] <- "ID"
-pheno <- cbind(SampleID = paste0(pheno$ID, "_", pheno$TP), pheno)
-pheno$Age <- NULL
+d_wide$TP <- as.numeric(d_wide$TP)
 
 covariates[] <- lapply(covariates, function(col) {
   if (length(unique(col)) < 3) {
@@ -41,15 +31,10 @@ covariates[] <- lapply(covariates, function(col) {
 covariate_names <- c("Age","BMI","storage_months", "Pregnancy_category")
 
 joined_data <- full_join(covariates, d_wide, by = c("ID"), relationship = 'one-to-many')
-
-tmp1 <- cbind(1, regress_covariates(d_wide[d_wide$TP == 1,], covariates))
-tmp2 <- cbind(2, regress_covariates(d_wide[d_wide$TP == 2,], covariates))
-tmp3 <- cbind(3, regress_covariates(d_wide[d_wide$TP == 3,], covariates))
-tmp4 <- cbind(4, regress_covariates(d_wide[d_wide$TP == 4,], covariates))
-colnames(tmp1)[1] = colnames(tmp2)[1]= colnames(tmp3)[1] = colnames(tmp4)[1] = 'TP'
-d_wide_adj_covar <- rbind(tmp1, tmp2, tmp3, tmp4)
+d_wide_adj_covar <- regress_covariates_lmm(d_wide, covariates, covars_longitudinal = F)
 joined_data_adj_covar <- full_join(covariates, d_wide_adj_covar, by = c("ID"), relationship = 'one-to-many')
 
+write.table(d_wide_adj_covar, file = paste0(out_basedir, "olink_clean_CVD+INF_adj_covariates.txt"), quote = F, sep = "\t", row.names = FALSE)
 
 
 ################################################################################
@@ -68,6 +53,10 @@ for (prot in colnames(d_wide)[4:ncol(d_wide)]){
 icc <- na.omit(icc) %>%
   mutate(across(-c( prot), as.numeric)) 
 icc <- icc[order(icc$ICC, decreasing = F),]
+
+write.table(icc, file = paste0(out_basedir, "ICC_per_protein.txt"), quote = F, sep = "\t", row.names = FALSE)
+
+pdf(paste0(out_basedir, "plots/ICC_per_protein_top100.pdf"))
 ggplot(icc[1:100,], aes(x = reorder(prot, -ICC), y = ICC)) + 
   geom_point(size = 2) + 
   theme_minimal() + xlab("protein")
@@ -77,7 +66,7 @@ ggplot(d_wide, aes(x = TP, y = PROK1, group = ID)) +
   geom_point(alpha = 0.4) + 
   theme_minimal() + 
   theme(legend.position = "")
-
+dev.off()
 ################################################################################
 # Protein vs TP LMM
 ################################################################################
@@ -98,11 +87,11 @@ lmm_res_prot_tp$BH_pval <- p.adjust(lmm_res_prot_tp$pval, method = 'BH')
 lmm_res_prot_tp <- lmm_res_prot_tp[order(lmm_res_prot_tp$pval),]
 lmm_res_prot_tp$bonf_sign <- ifelse(lmm_res_prot_tp$pval < 0.05/38,T,F)
 
-write.table(lmm_res_prot_tp, file = "../results/prot_vs_tp_poly3_lmm_adj_age_bmi_preg_storage.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(lmm_res_prot_tp, file = paste0(out_basedir, "prot_vs_tp_poly3_lmm_adj_age_bmi_preg_storage.txt"), quote = F, sep = "\t", row.names = FALSE)
 signif <- lmm_res_prot_tp[lmm_res_prot_tp$BH_pval < 0.05,]
 nrow(signif)
 
-lmm_res_prot_tp <- read.delim("../results/prot_vs_tp_poly3_lmm_adj_age_bmi_preg_storage.txt", sep = "\t", as.is = T, check.names = F)
+lmm_res_prot_tp <- read.delim(paste0(out_basedir, "prot_vs_tp_poly3_lmm_adj_age_bmi_preg_storage.txt"), sep = "\t", as.is = T, check.names = F)
 
 # plots
 prot= 'CHRDL2'
@@ -116,7 +105,7 @@ ggplot(d_wide, aes(x = TP, y = !!prot_ensym)) +
 
 # radian plot
 
-pdf("../plots/radian_BH.pdf", width = 10, height = 10)
+pdf(paste0(out_basedir,"plots/radian_BH.pdf"), width = 10, height = 10)
 make_radian_plot(d_wide, signif$prot)
 dev.off()
 
@@ -160,21 +149,21 @@ for (prot1 in all_prots){
   prot_coefs_raw[prot1,] <- lmm_fit_raw$coefficients
   setTxtProgressBar(pb,stepi)
   stepi <- stepi + 1
-#  for (prot2 in all_prots){
-#    if (prot2 %in% prot1_passed) next
-#  
-#   lmm_fit2 <- fit_lmm_poly3_adj_covar(d_wide, prot2, n = n_points, covariates, scale = T)
-#     
-#    # Euclidean distance between trajectories
-#    eucl_dist <- sum(abs(as.numeric(lmm_fit1$predicted) - as.numeric(lmm_fit2$predicted)))/length(lmm_fit1$predicted)
-#    
-#    #Euclidean distance in the lm coefficients space
-#    eucl_dist_coef <- TSdist::EuclideanDistance(lmm_fit1$coefficients, lmm_fit2$coefficients)
-#    
-#    prot_dist[cnt,] <- c(prot1, prot2, eucl_dist, eucl_dist_coef)
-#    cnt <- cnt + 1
-#  }
-#  prot1_passed <- c(prot1_passed, prot1)
+  for (prot2 in all_prots){
+    if (prot2 %in% prot1_passed) next
+  
+   lmm_fit2 <- fit_lmm_poly3_adj_covar(d_wide, prot2, n = n_points, covariates, scale = T)
+     
+    # Euclidean distance between trajectories
+    eucl_dist <- sum(abs(as.numeric(lmm_fit1$predicted) - as.numeric(lmm_fit2$predicted)))/length(lmm_fit1$predicted)
+    
+    #Euclidean distance in the lm coefficients space
+    eucl_dist_coef <- TSdist::EuclideanDistance(lmm_fit1$coefficients, lmm_fit2$coefficients)
+    
+    prot_dist[cnt,] <- c(prot1, prot2, eucl_dist, eucl_dist_coef)
+    cnt <- cnt + 1
+  }
+  prot1_passed <- c(prot1_passed, prot1)
 }
 
 cat("\n")
@@ -199,20 +188,20 @@ sim_matrix[lower.tri(sim_matrix)] <- t(sim_matrix)[lower.tri(sim_matrix)]
 sim_matrix_coef <- my_pivot_wider(prot_dist, "prot1", "prot2", "eucl_similarity_coef")
 sim_matrix_coef[lower.tri(sim_matrix_coef)] <- t(sim_matrix_coef)[lower.tri(sim_matrix_coef)]
 
-
-write.table(sim_matrix, file = "../results/trajectories/similarity_matrix_eucl_109signif.txt", quote = F, sep = "\t", row.names = FALSE)
-write.table(dist_matrix, file = "../results/trajectories/distance_matrix_eucl_109signif.txt", quote = F, sep = "\t", row.names = FALSE)
-write.table(prot_dist, file = "../results/trajectories/protein_distance_eucl_109signif.txt", quote = F, sep = "\t", row.names = FALSE)
-write.table(prot_trajs, file = "../results/trajectories/protein_trajectories_109signif.txt", quote = F, sep = "\t", row.names = FALSE)
+dir.create(file.path(out_basedir, "trajectories"))
+write.table(sim_matrix, file = paste0(out_basedir, "trajectories/similarity_matrix_eucl_109signif.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(dist_matrix, file = paste0(out_basedir, "trajectories/distance_matrix_eucl_109signif.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(prot_dist, file = paste0(out_basedir, "trajectories/protein_distance_eucl_109signif.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(prot_trajs, file = paste0(out_basedir, "trajectories/protein_trajectories_109signif.txt"), quote = F, sep = "\t", col.names = NA, row.names = T)
 
 
 # Heatmap and clustering on euclidean distance between curves
 method = 'hclust_my_eucl_dist'
 num_k = 8
-hm <- pheatmap(dist_matrix, cutree_rows = num_k, cutree_cols = num_k, filename = paste0("../plots/trajectories/", method, "_k", num_k, "_heatmap.pdf"))
+hm <- pheatmap(dist_matrix, cutree_rows = num_k, cutree_cols = num_k, filename = paste0(out_basedir,"trajectories/", method, "_k", num_k, "_heatmap.pdf"))
 cl  = cutree(hm$tree_row, k = num_k)
-plot_clusters(cl, method, num_k, out_path = paste0("../plots/trajectories/", method, "_k", num_k, "_109signif.pdf"))
-write.table(as.data.frame(cl), file = paste0("../results/trajectories/", method, "_k", num_k, "_109signif.txt"), quote = F, sep = "\t")
+plot_clusters(cl, method, num_k, out_path = paste0(out_basedir,"trajectories/", method, "_k", num_k, "_109signif.pdf"))
+write.table(as.data.frame(cl), file = paste0(out_basedir, "trajectories/", method, "_k", num_k, "_109signif.txt"), quote = F, sep = "\t")
 
 # Get pairwise differences between i and i+1 timepoint and cluster according to them
 prot_deltas <- data.frame(matrix(nrow = nrow(prot_trajs), ncol = ncol(prot_trajs) - 1))
@@ -227,28 +216,31 @@ num_k = 6
 #num_k = 15
 pam_res <- cluster::pam(prot_deltas, num_k, diss = F)
 cl <- pam_res$clustering
-plot_clusters(cl, method, num_k, out_path = paste0("../plots/trajectories/", method, "_k", num_k, "_109signif.pdf"))
-write.table(as.data.frame(cl), file = paste0("../results/trajectories/", method, "_k", num_k, "_109signif.txt"), quote = F, sep = "\t")
+plot_clusters(cl, method, num_k, out_path = paste0(out_basedir,"trajectories/", method, "_k", num_k, "_109signif.pdf"))
+write.table(as.data.frame(cl), file = paste0(out_basedir, "trajectories/", method, "_k", num_k, "_109signif.txt"), quote = F, sep = "\t")
 
-pheatmap(prot_deltas, cluster_rows = F, cluster_cols = F,filename = paste0("../plots/trajectories/", method, "_k", num_k, "_heatmap.pdf"), fontsize_row = 6)
+pheatmap(prot_deltas, cluster_rows = F, cluster_cols = F,filename = paste0(out_basedir,"trajectories/", method, "_k", num_k, "_heatmap.pdf"), fontsize_row = 6)
+
+
+
 
 ################################################################################
 # Classify using median values and paired wilcoxon test
 ################################################################################
-source("../scripts/classify_proteins_wilcox_delta.R")
+source("scripts/classify_proteins_wilcox_delta.R")
 prots <- colnames(d_wide)[4:ncol(d_wide)]
 prots <- signif$prot
 classified <- classify_median_wilcox(d_wide, prots, wilcox_p_threshold = 0.05)
 cl <- classified$Pattern
 names(cl) <- classified$prot
-plot_clusters(cl, out_path = "../plots/trajectories/classify_median_wilcox_109signif.pdf", add_cluster_name = T)  
+plot_clusters(cl, out_path = paste0(out_basedir, "/trajectories/classify_median_wilcox_109signif.pdf"), add_cluster_name = T)  
 
 classified$test_pattern <- classified$Pattern
 classified$test_pattern <- gsub("-", "same",classified$test_pattern)
 classified$test_pattern <- gsub("/", "up",classified$test_pattern)
 classified$test_pattern <- gsub("\\", "down",classified$test_pattern,  fixed=TRUE)
 classified$test_pattern <- gsub(" ", "_",classified$test_pattern)
-write.table(classified, file = "../results/trajectories/classification_median_wilcox_109signif.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(classified, file = paste0(out_basedir, "/trajectories/classification_median_wilcox_109signif.txt"), quote = F, sep = "\t", row.names = FALSE)
  
 
 ################################################################################
@@ -259,8 +251,8 @@ all_prots <-  colnames(d_wide)[4:ncol(d_wide)]
 #prot_rmcorr <- data.frame(matrix(nrow = length(all_prots) * length(all_prots), ncol = 4))
 #colnames(prot_rmcorr) <- c("prot1", "prot2", "r", "p")
 
-prot_lmm <- data.frame(matrix(nrow = length(all_prots) * length(all_prots), ncol = 6))
-colnames(prot_lmm) <- c("prot1", "prot2", "r", "p", "r_tp", "p_tp")
+prot_lmm <- data.frame(matrix(nrow = length(all_prots) * length(all_prots), ncol = 12))
+colnames(prot_lmm) <- c("prot1", "prot2", "r", "p", "tval", "se","r_tp", "p_tp", "tval_tp", "se_tp", "n", "n_samples")
 
 prot1_passed <- ""
 
@@ -273,17 +265,17 @@ for (prot1 in all_prots){
   stepi <- stepi + 1
   #print(prot1)
   for (prot2 in all_prots){
-    if (prot2 %in% prot1_passed) next
+    #if (prot2 %in% prot1_passed) next
     if (prot1 == prot2) next
     #rm_corr <- get_rmcorr(d_wide_adj_covar, d_wide_adj_covar, prot1, prot2) 
     #prot_rmcorr[cnt,] <- c(prot1, prot2, rm_corr$r, rm_corr$p)
+    lmm_res <- lmm_pheno_prot_adj_covar(d_wide, d_wide, prot1, prot2, covariates, scale = T, adjust_timepoint = 'none')
+    lmm_res_tp <- lmm_pheno_prot_adj_covar(d_wide, d_wide, prot1, prot2, covariates, scale = T, adjust_timepoint = 'cubic')
     
-    lmm_res <- lmm_pheno_prot_adj_covar_noTP(d_wide, d_wide, prot1, prot2, covariates, scale = T)
-    lmm_res_tp <- lmm_pheno_prot_adj_covar_withTP(d_wide, d_wide, prot1, prot2, covariates, scale = T)
-    prot_lmm[cnt,] <- c(prot1, prot2, lmm_res$estimate, lmm_res$pval, lmm_res_tp$estimate, lmm_res_tp$pva)
+    prot_lmm[cnt,] <- c(prot1, prot2, lmm_res$estimate, lmm_res$pval, lmm_res$tval, lmm_res$se, lmm_res_tp$estimate, lmm_res_tp$pval, lmm_res_tp$tval, lmm_res_tp$se, lmm_res_tp$n, lmm_res_tp$n_samples)
     cnt <- cnt + 1
   }
-  prot1_passed <- c(prot1_passed, prot1)
+  #prot1_passed <- c(prot1_passed, prot1)
 }
 cat("\n")
 close(pb)
@@ -291,7 +283,7 @@ close(pb)
 prot_lmm <- na.omit(prot_lmm) %>%
   mutate(across(-c( prot1, prot2), as.numeric))  
 
-write.table(prot_lmm, file = "../results/prot_vs_prot_lmm_adj_covar.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(prot_lmm, file = paste0(out_basedir, "/prot_vs_prot_lmm_adj_covar.txt"), quote = F, sep = "\t", row.names = FALSE)
 
 
 prot_lmm <- read.delim("../results/prot_vs_prot_lmm_adj_covar.txt", as.is = T, check.names = F, sep = "\t")
@@ -299,14 +291,14 @@ prot_lmm <- na.omit(prot_lmm) %>%
   mutate(across(-c( prot1, prot2), as.numeric))  
 
 # fill in proteins only tested as prot1 or prot2 because of the loop check
-missing_prot2 <- setdiff(unique(prot_lmm$prot1), unique(prot_lmm$prot2))
-missing_prot1 <- setdiff(unique(prot_lmm$prot2), unique(prot_lmm$prot1))
-mp2_res <- prot_lmm[prot_lmm$prot1 == missing_prot2, c(2,1,3,4,5,6)]
-mp1_res <- prot_lmm[prot_lmm$prot2 == missing_prot1, c(2,1,3,4,5,6)]
-mp1_res <- mp1_res[mp1_res$prot1 != missing_prot2,]
-colnames(mp1_res) = colnames(mp2_res) = colnames(prot_lmm)
+#missing_prot2 <- setdiff(unique(prot_lmm$prot1), unique(prot_lmm$prot2))
+#missing_prot1 <- setdiff(unique(prot_lmm$prot2), unique(prot_lmm$prot1))
+#mp2_res <- prot_lmm[prot_lmm$prot1 == missing_prot2, c(2,1,3,4,5,6)]
+#mp1_res <- prot_lmm[prot_lmm$prot2 == missing_prot1, c(2,1,3,4,5,6)]
+#mp1_res <- mp1_res[mp1_res$prot1 != missing_prot2,]
+#colnames(mp1_res) = colnames(mp2_res) = colnames(prot_lmm)
 
-prot_lmm <- rbind(prot_lmm, mp2_res, mp1_res)
+#prot_lmm <- rbind(prot_lmm, mp2_res, mp1_res)
 
 lmm_matrix <- my_pivot_wider(prot_lmm, "prot1", "prot2", "r")
 lmm_matrix[lower.tri(lmm_matrix)] <- t(lmm_matrix)[lower.tri(lmm_matrix)]
@@ -479,15 +471,29 @@ pheatmap(counts, cluster_rows = F, cluster_cols = F, color = c( "white", "dodger
 # LMM protein - phenotype
 ################################################################################
 
+pheno <- read.delim("../../phenotypes/blood_pheno_03102024_log.txt", as.is = T, check.names = F, sep = "\t")
+
+#pheno <- read.delim("../../phenotypes/blood_pheno_13122024_log.txt", as.is = T, check.names = F, sep = "\t")
+
+pheno$Record.ID <- gsub("ID_", "", pheno$Record.ID)
+colnames(pheno) <- gsub("Record.ID","ID",colnames(pheno))
+pheno <- cbind(SampleID = paste0(pheno$ID, "_", pheno$TP), pheno)
+pheno$Age <- NULL
+
+covariates2 <- left_join(pheno[,c("ID", "TP", "Batch_hormones")], covariates, by = "ID")
+
+pheno$Batch_hormones <- NULL
 
 ## Hormone and lipid trajectories
 lmm_res_pheno_tp <- data.frame(matrix(nrow = (ncol(pheno) -4), ncol = 2))
 colnames(lmm_res_pheno_tp) <- c("pheno", "pval")
 cnt <- 1
 
+
 plot_list <- list()
 for (ph in colnames(pheno)[4:ncol(pheno)]) {
-  ph_lmm <- lmm_prot_tp_poly3_adj_covar(pheno, ph, covariates, scale = T)
+  print(ph)
+  ph_lmm <- lmm_prot_tp_poly3_adj_covar(pheno, ph, subset(covariates, select = -c(storage_months)), scale = T)
   lmm_res_pheno_tp[cnt,] <- c(ph, ph_lmm)
   cnt <- cnt + 1
   
@@ -499,33 +505,64 @@ for (ph in colnames(pheno)[4:ncol(pheno)]) {
     ggtitle(paste0(ph, "; LMM P = ", formatC(ph_lmm, digits = 3))) + 
     theme_minimal()
 }
-pdf("../plots/lipids_hormones_poly3.pdf", height = 15, width = 15)
+pdf("../plots/pheno_prot_batch2/lipids_hormones_poly3.pdf", height = 15, width = 15)
 grid.arrange(grobs = plot_list, ncol = 4, nrow = 4)  
 dev.off()
 
 lmm_res_pheno_tp <- na.omit(lmm_res_pheno_tp) %>%
   mutate(across(-pheno, as.numeric))  
 lmm_res_pheno_tp$BH_pval <- p.adjust(lmm_res_pheno_tp$pval, method = 'BH')
-write.table(lmm_res_pheno_tp, file = "../results/pheno_vs_tp_poly3_lmm_adj_age_bmi_preg_storage.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(lmm_res_pheno_tp, file = "../results/pheno_prot_batch2/pheno_vs_tp_poly3_lmm_adj_age_bmi_preg.txt", quote = F, sep = "\t", row.names = FALSE)
+
+
+#### Hormones and lipids vs hormones and lipids
+
+
+all_phenos = colnames(pheno)[4:ncol(pheno)]
+pheno_lmm <- data.frame(matrix(nrow = length(all_phenos) * length(all_phenos), ncol = 4))
+colnames(pheno_lmm) <- c("pheno1", "pheno2", "estimate", "p")
+
+passed <- c()
+cnt <- 1
+for (ph1 in all_phenos){
+  for (ph2 in all_phenos){
+    if (ph1 == ph2) next
+    if (ph2 %in% passed) next
+    #rm_corr <- get_rmcorr(d_wide_adj_covar, d_wide_adj_covar, prot1, prot2) 
+    #prot_rmcorr[cnt,] <- c(prot1, prot2, rm_corr$r, rm_corr$p)
+    
+    res <- lmm_pheno_prot_adj_covar(pheno, pheno, ph1, ph2, subset(covariates, select = -c(storage_months)), scale = T, adjust_timepoint = 'cubic')
+    
+    pheno_lmm[cnt,] <- c(ph1, ph2, res$estimate, res$pval)
+    cnt <- cnt + 1
+  }
+  passed <- c(passed, ph1)
+}
+
+pheno_lmm <- na.omit(pheno_lmm) %>%
+  mutate(across(-c( pheno1, pheno2), as.numeric))  
+
+write.table(pheno_lmm, file = "../results/pheno_prot/pheno_vs_pheno_lmm_adj_covar.txt", quote = F, sep = "\t", row.names = FALSE)
+
 
 
 
 #### Proteins vs phenotypes: LMM
 
-#lmm_res <- data.frame(matrix(nrow = (ncol(d_wide) -4) * (ncol(pheno) -4), ncol = 6))
-#colnames(lmm_res) <- c("prot", "pheno", "estimate", "pval", "se", "tval")
+lmm_res <- data.frame(matrix(nrow = (ncol(d_wide) -4) * (ncol(pheno) -4), ncol =8))
+colnames(lmm_res) <- c("prot", "pheno", "estimate", "pval", "se", "tval", "N", "N_unique")
 
-lmm_res_no_tp <- data.frame(matrix(nrow = (ncol(d_wide) -4) * (ncol(pheno) -4), ncol = 6))
-colnames(lmm_res_no_tp) <- c("prot", "pheno", "estimate", "pval", "se", "tval")
+lmm_res_no_tp <- data.frame(matrix(nrow = (ncol(d_wide) -4) * (ncol(pheno) -4), ncol = 8))
+colnames(lmm_res_no_tp) <- c("prot", "pheno", "estimate", "pval", "se", "tval", "N", "N_unique")
 cnt <- 1
 for (ph in colnames(pheno)[4:ncol(pheno)]) {
   cat(ph, "\n")
   for (prot in colnames(d_wide)[4:ncol(d_wide)]){
-    #res <- lmm_pheno_prot_adj_covar(d_wide, pheno, prot, ph, covariates, scale = T, adjust_timepoint = 'cubic')
-    #lmm_res[cnt,] <- c(prot, ph, unlist(res))
+    res <- lmm_pheno_prot_adj_covar(d_wide, pheno, prot, ph, covariates, scale = T, adjust_timepoint = 'cubic')
+    lmm_res[cnt,] <- c(prot, ph, unlist(res))
     
-    res0 <- lmm_pheno_prot_adj_covar(d_wide, pheno, prot, ph, covariates, scale = T, adjust_timepoint = 'none')
-    lmm_res_no_tp[cnt,] <- c(prot, ph, unlist(res0))
+    #res0 <- lmm_pheno_prot_adj_covar(d_wide, pheno, prot, ph, covariates, scale = T, adjust_timepoint = 'none')
+    #lmm_res_no_tp[cnt,] <- c(prot, ph, unlist(res0))
     cnt <- cnt + 1
   }
 }
@@ -535,17 +572,17 @@ lmm_res <- na.omit(lmm_res) %>%
 lmm_res$BH_pval <- p.adjust(lmm_res$pval)
 lmm_res <- lmm_res[order(lmm_res$pval),]
 nrow(lmm_res[lmm_res$BH_pval < 0.05,])
-write.table(lmm_res, file = "../results/prot_vs_pheno_withTP_lmm_adj_covar.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(lmm_res, file = "../results/pheno_prot_batch2/prot_vs_pheno_withTP_lmm_adj_covar.txt", quote = F, sep = "\t", row.names = FALSE)
 
 
 lmm_res_no_tp <- na.omit(lmm_res_no_tp) %>%
   mutate(across(-c(pheno, prot), as.numeric)) 
 lmm_res_no_tp$BH_pval <- p.adjust(lmm_res_no_tp$pval)
 lmm_res_no_tp <- lmm_res_no_tp[order(lmm_res_no_tp$pval),]
-write.table(lmm_res_no_tp, file = "../results/prot_vs_pheno_noTP_lmm_adj_covar.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(lmm_res_no_tp, file = "../results/pheno_prot_batch2/prot_vs_pheno_noTP_lmm_adj_covar.txt", quote = F, sep = "\t", row.names = FALSE)
 
-lmm_res <- read.delim("../results/prot_vs_pheno_withTP_lmm_adj_covar.txt", sep = "\t", as.is = T, check.names = T)
-lmm_res_no_tp <- read.delim("../results/prot_vs_pheno_noTP_lmm_adj_covar.txt", sep = "\t", as.is = T, check.names = T)
+lmm_res <- read.delim("../results/pheno_prot/prot_vs_pheno_withTP_lmm_adj_covar.txt", sep = "\t", as.is = T, check.names = T)
+lmm_res_no_tp <- read.delim("../results/pheno_prot/prot_vs_pheno_noTP_lmm_adj_covar.txt", sep = "\t", as.is = T, check.names = T)
 
 # tmp <- inner_join(lmm_res, inner_join(lmm_res_linTP, lmm_res_tp, by = c("pheno", "prot")), by = c("pheno", "prot"))
 # tmp$logp.x <- -log10(tmp$pval.x)
@@ -583,7 +620,7 @@ plot_list <- list()
 for (i in 1:20) {
   plot_list[[i]] <- scatter_col_tp(d_wide, pheno, lmm_res[i, "prot"], lmm_res[i, "pheno"], scale = T)
 }
-pdf("../plots/prot_pheno_scatter_scaled_top.pdf", height = 20, width = 15)
+pdf("../plots/pheno_prot/prot_pheno_scatter_scaled_top.pdf", height = 20, width = 15)
 grid.arrange(grobs = plot_list, ncol = 4, nrow = 5)  
 dev.off()
 
@@ -619,7 +656,7 @@ sign_pheno <- unique(lmm_res[lmm_res$BH_pval < 0.05, "pheno"])
 
 tmp <- lmm_res[lmm_res$prot %in% sign_prots & lmm_res$pheno %in% sign_pheno,]
 tmp$pheno <- factor(tmp$pheno, levels = c("ALT", "AST", "LH", "FSH","PROG", "X17BES", "PRL", "HDLC", "TotChol", "Trigl"))
-pdf("../plots/pheno_vs_prot_forest_with_poly3TP.pdf", height = 10, width = 10)
+pdf("../plots/pheno_prot/pheno_vs_prot_forest_with_poly3TP.pdf", height = 10, width = 10)
 ggplot(tmp ,aes(x = prot, y = estimate, ymin = lower, ymax = upper))+
   geom_pointrange(aes(color = sign)) +
   geom_hline(lty=2, aes(yintercept=0)) +
@@ -645,7 +682,7 @@ sign_pheno <- unique(tmp[tmp$BH_pval < 0.05, "pheno"])
 
 tmp <- tmp[tmp$prot %in% sign_prots & tmp$pheno %in% sign_pheno,]
 tmp$pheno <- factor(tmp$pheno, levels = c("ALT", "AST", "LH", "FSH","PROG", "X17BES", "PRL", "HDLC", "TotChol", "Trigl", "HOMA_IR", "INS"))
-pdf("../plots/pheno_vs_prot_forest_with_and_without_poly3TP.pdf", height = 20, width = 10)
+pdf("../plots/pheno_prot/pheno_vs_prot_forest_with_and_without_poly3TP.pdf", height = 20, width = 10)
 ggplot(tmp ,aes(x = prot, y = estimate, ymin = lower, ymax = upper, group = adjustment, color = adjustment))+
   geom_linerange( position = position_dodge(width = 0.5), aes(lty = sign, color = adjustment)) +
   geom_point(size = 2.5,  stroke = 0.5, position = position_dodge(width = 0.5), aes(shape = sign))+
@@ -714,7 +751,7 @@ summary_table <- tmp %>%
   )
 View(summary_table)
 
-write.table(tmp, file = "../results_replication_lmm_prot_vs_pheno_cubic.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(tmp, file = "../pheno_prot_batch2/results_replication_lmm_prot_vs_pheno_cubic.txt", quote = F, sep = "\t", row.names = FALSE)
 
 ggplot(tmp, aes(beta, y = var_explained, color = BH_signif)) + 
   geom_point() + 
@@ -806,6 +843,12 @@ n_points = 100
 pheno_dist <- data.frame(matrix(nrow = length(all_prots) * length(all_pheno), ncol = 4))
 colnames(pheno_dist) <- c("prot", "pheno", "eucl",  "eucl_coef")
 
+pheno_trajs <- data.frame(matrix(nrow = length(all_pheno) , ncol = n_points))
+row.names(pheno_trajs) <- all_pheno
+colnames(pheno_trajs) <- seq(1,4, length.out = n_points)
+
+pheno_passed <- c()
+
 pb = txtProgressBar(min = 0, max = length(all_prots), initial = 0) 
 stepi = 0
 cnt <- 1
@@ -817,7 +860,10 @@ for (prot in all_prots){
   stepi <- stepi + 1
   for (ph in all_pheno){
      lmm_fit2 <- fit_lmm_poly3_adj_covar(pheno, ph, n = n_points, covariates, scale = T)
-       
+       if (! ph %in% pheno_passed){
+         pheno_trajs[ph,] <- lmm_fit2$predicted
+         pheno_passed <- c(pheno_passed)
+       }
       # Euclidean distance between trajectories
       eucl_dist <- sum(abs(as.numeric(lmm_fit1$predicted) - as.numeric(lmm_fit2$predicted)))/length(lmm_fit1$predicted)
       
@@ -841,12 +887,28 @@ pheno_dist <- pheno_dist %>%
   mutate(eucl_scaled = scale_this(eucl),
          eucl_coef_scaled = scale_this(eucl_coef))
 
-write.table(pheno_dist, file = "../results/prot_vs_pheno_noTP_distance_adj_covar_signif_pheno.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(pheno_dist, file = "../results/pheno_prot_batch2/prot_vs_pheno_noTP_distance_adj_covar_signif_pheno.txt", quote = F, sep = "\t", row.names = FALSE)
 
 dist_matrix_ph <- my_pivot_wider(pheno_dist, "prot", "pheno", "eucl_coef")
 pheatmap(dist_matrix_ph, show_rownames = F, treeheight_row = 0)
 
 d_wide$TP <- as.numeric(d_wide$TP)
+
+
+# trajectories
+n_points = 100
+
+pheno_trajs <- data.frame(matrix(nrow = length(all_pheno) , ncol = n_points))
+row.names(pheno_trajs) <- all_pheno
+colnames(pheno_trajs) <- seq(1,4, length.out = n_points)
+
+for (ph in all_pheno){
+    lmm_fit2 <- fit_lmm_poly3_adj_covar(pheno, ph, n = n_points, covariates, scale = T)
+    pheno_trajs[ph,] <- lmm_fit2$predicted
+}
+write.table(pheno_trajs, file = "../results/trajectories/pheno_traj_adj_covar_signif_pheno.txt", quote = F, sep = "\t", row.names = T, col.names = NA)
+
+
 
 
 
@@ -899,6 +961,65 @@ for (ph in all_pheno) {
   #plot_list[[ph]] <- plot_traj_prots_and_pheno(d_wide, pheno, top$prot, ph, title = ph)
   plot_list[[ph]] <- plot_medians_prots_and_pheno(d_wide, pheno, top$prot, ph, title = ph)
 }
-pdf(paste0("../plots/trajectories/pheno_prot_medians_", dist_metrics, "_q0.05.pdf"), height = 15, width = 15)
+pdf(paste0("../plots/trajectories/pheno_prot_batch2/pheno_prot_medians_", dist_metrics, "_q0.05.pdf"), height = 15, width = 15)
 grid.arrange(grobs = plot_list, ncol = 4, nrow = 4)  
 dev.off()
+
+
+
+
+
+################################################################################
+# Network analysis
+################################################################################
+
+lmm_res <- read.delim("../results/pheno_prot/prot_vs_pheno_withTP_lmm_adj_covar.txt", sep = "\t", as.is = T, check.names = T)
+prot_lmm <- read.delim("../results/prot_vs_prot_lmm_adj_covar.txt", as.is = T, check.names = F, sep = "\t")
+pheno_lmm <- read.delim("../results/pheno_prot/pheno_vs_pheno_lmm_adj_covar.txt", as.is = T, check.names = F, sep = "\t")
+
+d1 <- lmm_res[lmm_res$BH_pval < 0.1,c("prot", "pheno", "estimate", "pval")]
+colnames(d1) <- c("n1", "n2", "beta", "pval")
+prots <- unique(lmm_res[lmm_res$BH_pval < 0.1, "prot"])
+
+d2 <- prot_lmm[prot_lmm$prot1 %in% prots & prot_lmm$prot2 %in% prots,c("prot1", "prot2", "r_tp", "p_tp")]
+colnames(d2) <- c("n1", "n2", "beta", "pval")
+
+d3 <- pheno_lmm[,c("pheno1", "pheno2", "estimate", "p")]
+colnames(d3) <- c("n1", "n2", "beta", "pval")
+
+combined <- rbind(d1 ,d2, d3)
+
+attribs <- rbind(
+  data.frame(node = lmm_res[,"prot"], type = 'protein'),
+  data.frame(node = lmm_res[,"pheno"], type = 'lipid')
+)
+attribs <- unique(attribs)
+attribs[attribs$node %in% c("PROG","LH","FSH","X17BES","PRL"), "type"] <- "hormone"
+attribs_colors <- c("hormone" = "#00A072", "lipid" = "#F65C00", "protein" = "#006DB3")
+
+beta_threshold = 0.1
+pval_threshold = 1e-5
+
+combined_flt <- combined[abs(combined$beta) > beta_threshold & combined$pval < pval_threshold,]
+combined_flt$sign <- ifelse(combined_flt$beta > 0, "pos", "neg")
+combined_flt$abs_beta <- abs(combined_flt$beta)
+
+combined_edges <- combined_flt[,c("n1", "n2")]
+net <- graph_from_data_frame(d=combined_edges, directed=F) 
+
+E(net)$weight <- combined_flt$beta
+V(net)$type <- attribs$type[match(V(net)$name, attribs$node)]
+V(net)$color <- attribs_colors[V(net)$type]
+
+pdf("../plots/network/network_plot_r.pdf", width = 10, height = 10)
+plot(net, 
+     edge.width = abs(E(net)$weight) * 5, # Scale edge width by weight
+     edge.color = ifelse(E(net)$weight > 0, "#FF9900", "dodgerblue"), 
+     vertex.size = 10, 
+     vertex.label.cex = 0.8,
+     vertex.label.color = "black", # Node label text color
+     layout = layout)
+dev.off()
+
+write.table(combined_flt, file = "../plots/network/edges_lmm_BH0.1_beta0.1_pval_1e-5.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(attribs, file = "../plots/network/nodes.txt", quote = F, sep = "\t", row.names = FALSE)

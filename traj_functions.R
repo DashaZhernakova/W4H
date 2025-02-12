@@ -11,9 +11,10 @@ library(dplyr)
 library(lme4)
 library(splines)
 library(dtw)
-library(nlme)
+#library(nlme)
 
 plot_together <- function(d_wide, pheno, prot, ph, annot = "", method = "poly3", scale = T){
+  if (is.character(d_wide$TP)) d_wide$TP <- as.numeric(d_wide$TP)
   d_subs <- inner_join(d_wide[,c("ID", "TP", prot)], pheno[,c("ID", "TP", ph)], by = c("ID", "TP"))
   colnames(d_subs) <- c("ID", "TP", "prot", "pheno")
 
@@ -206,8 +207,15 @@ lmm_pheno_prot <- function(d_wide, pheno, prot, ph, scale = F){
 
 
 lmm_pheno_prot_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale = F, adjust_timepoint = "cubic"){
-  d_subs <- inner_join(inner_join(d_wide[,c("SampleID", "ID", "TP", prot)], pheno[,c("SampleID" ,ph)], by = c("SampleID")),
+  
+  if(! "TP" %in% colnames(covariates) ){
+    d_subs <- inner_join(inner_join(d_wide[,c("SampleID", "ID", "TP", prot)], pheno[,c("SampleID" ,ph)], by = c("SampleID")),
                        covariates, by = c("ID"))
+  } else {
+    d_subs <- inner_join(inner_join(d_wide[,c("SampleID", "ID", "TP", prot)], pheno[,c("SampleID" ,ph)], by = c("SampleID")),
+                         covariates, by = c("ID", "TP"))
+    covariates$TP = NULL
+  }
   colnames(d_subs)[1:5] <- c("SampleID", "ID", "TP", "prot", "pheno")
   d_subs$TP <- as.numeric(d_subs$TP)
   d_subs <- na.omit(d_subs)
@@ -239,7 +247,7 @@ lmm_pheno_prot_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale 
   an <- suppressMessages(anova(model, model0))
   pval <- an$`Pr(>Chisq)`[2]
   
-  return(list(estimate = est, pval = pval, se = se, tval = tval))
+  return(list(estimate = est, pval = pval, se = se, tval = tval, n = nrow(d_subs), n_samples = length(unique(d_subs$ID))))
 }
 
 lmm_pheno_prot_no_adj_covar <- function(d_wide, pheno, prot, ph,  scale = F, adjust_timepoint = "cubic"){
@@ -380,7 +388,7 @@ lmm_prot_tp_poly3_adj_age_bmi <- function(d_wide, prot, covariates, scale = F){
 }
 
 lmm_prot_tp_poly3_adj_covar <- function(d_wide, prot, covariates, scale = F){
-  d_subs <- inner_join(d_wide[,c(prot, "ID", "TP", prot)], covariates, by = c("ID"))
+  d_subs <- inner_join(d_wide[,c(prot, "ID", "TP")], covariates, by = c("ID"))
   colnames(d_subs)[1] <- "prot"
   
   d_subs$TP <- as.numeric(d_subs$TP)
@@ -395,7 +403,6 @@ lmm_prot_tp_poly3_adj_covar <- function(d_wide, prot, covariates, scale = F){
   
   return(pval)
 }
-
 get_ICC <- function(d_wide, prot){
   d_subs <- d_wide[,c(prot, "ID", "TP")]
   colnames(d_subs)[1] <- "prot"
@@ -426,8 +433,8 @@ fit_lmm_poly3_adj_covar <- function(d_wide, prot, n = 10, covariates, scale = F,
   
   d_subs$TP <- as.numeric(d_subs$TP)
   d_subs <- na.omit(d_subs)
-
-  if (scale) d_subs$prot <- scale(d_subs$prot)
+  d_subs$ID <- as.factor(d_subs$ID)
+  if (scale) d_subs[,"prot"] <- scale(d_subs[,"prot"])
   
   # make all columns with less than 3 unique values as factors  
   d_subs[] <- lapply(d_subs, function(col) {
@@ -801,4 +808,68 @@ plot_clusters <- function(cl, method = "", num_k = "", colored = F, signif = NUL
   #}
   if(save_pdf) dev.off()
   
+}
+
+
+regress_covariates_per_tp <- function(data, covariates){
+  data_tp <- as.data.frame(subset(data, select = -c(TP, ID)))
+  if ("SampleID" %in% colnames(data_tp)) data_tp <- subset(data_tp, select = -c(SampleID))
+  row.names(data_tp) <- data$ID
+  data_tp <- na.omit(data_tp)
+  
+  covariates <- na.omit(covariates)
+  row.names(covariates) <- covariates$ID
+  if (colnames(covariates)[1] == 'ID' && ncol(covariates) == 2) {
+    covariates <- covariates[,-1,drop = F] 
+  } else {
+    covariates$ID <- NULL
+  }
+
+  ids <- intersect(row.names(covariates), row.names(data_tp))
+  data_tp <- data_tp[ids,]
+  covariates <- covariates[ids,,drop = F]
+  
+  new_d <- data.frame(matrix(ncol = ncol(data_tp), nrow = nrow(data_tp)))
+  colnames(new_d) <- colnames(data_tp)
+  row.names(new_d) <- row.names(data_tp)
+  for (col in 1:ncol(data_tp)){
+    tmp <- as.data.frame(cbind(data_tp[,col], covariates))
+    colnames(tmp)[1] <- "prot"
+    form <- as.formula(paste("prot ~", paste(colnames(covariates), collapse = "+")))
+    lm_fit <- lm(form, data = tmp)
+    new_d[,col] <- residuals(lm_fit)
+  }
+  new_d <- new_d %>%
+    rownames_to_column(var = 'ID')
+  
+  return(new_d)
+}
+
+
+regress_covariates_lmm <- function(data, covar_data){
+  
+  if (!"SampleID" %in% colnames(covar_data)) {
+    covar_data <- cbind(paste0(covar_data$ID, "_",covar_data$TP), covar_data)
+    colnames(covar_data)[1] <- "SampleID"
+  }
+  
+  d_adj <- data[,c("SampleID", "ID", "TP")]
+  
+  data[,"TP"] <- NULL
+  covar_data[,c("ID", "TP")] <- NULL
+  
+  cnt <- 1
+  for (ph in colnames(data)[3: (ncol(data))]){
+    subs <- na.omit(inner_join(data[, c("ID","SampleID", ph)], covar_data, by = "SampleID"))
+    colnames(subs)[3] <- 'pheno'
+    
+    fo_lmm <- as.formula(paste("pheno ~ ", paste(colnames(covar_data)[-1], collapse = "+"), "+ (1|ID)"))
+    
+    
+    lmm_fit <- lmer(fo_lmm, data = subs)
+    subs[,ph] <- subs$pheno - predict(lmm_fit, re.form = NA)
+    
+    d_adj <- left_join(d_adj, subs[, c("SampleID", ph)], by = "SampleID")
+  }
+  return(d_adj)
 }
