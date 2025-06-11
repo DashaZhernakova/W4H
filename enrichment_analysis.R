@@ -12,7 +12,7 @@ prot_names <- read.delim("data/olink_protein_names.txt", sep = "\t", as.is = T, 
 
 #sign_pheno <- unique(lmm_res[lmm_res$BH_pval < 0.05, "pheno"])
 
-plot_list <- list()
+
 
 #input_data <- as.data.frame(pheno_dist)
 #input_data$eucl_coef_similarity <- 1 / (1 + input_data$eucl_coef)
@@ -21,8 +21,10 @@ plot_list <- list()
 #fold_change <- 'eucl_coef_similarity'
 
 input_data <- gam_res_lin 
-#fold_change <- "est_spline"
 fold_change <- "est_noTP"
+
+#input_data <- gam_res_diet_w 
+#fold_change <- "lmm_est"
 
 
 #input_data <- lmm_res
@@ -50,9 +52,11 @@ for (ph in unique(input_data$pheno)){
   
   if (nrow(enrich_res[['reactome']]@result) > 0) rea_res <- cbind(data.frame("ONTOLOGY" = "Reactome"), as_tibble(enrich_res[['reactome']]@result))
   
-  combined_res <- rbind(gse_res, kegg_res, rea_res)
-  enrichment_res <- rbind(enrichment_res, cbind(data.frame("Phenotype" = ph), combined_res))
   tryCatch({
+    combined_res <- rbind(gse_res, kegg_res, rea_res)
+    enrichment_res <- rbind(enrichment_res, cbind(data.frame("Phenotype" = ph), combined_res))
+    
+    
     plot_list[[ph]] <- dotplot(enrich_res[['gse']], showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle(ph) + theme(axis.text.y=element_text(size=8))
     plot_list[[paste0(ph, "_kegg")]] <- dotplot(enrich_res[['kegg']], showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle(paste(ph, " KEGG"))
     plot_list[[paste0(ph, "_reactome")]] <- dotplot(enrich_res[['reactome']], showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle(paste(ph, " Reactome"))
@@ -91,6 +95,26 @@ for (ph in unique(input_data$pheno)){
 write.table(enrichment_res, file = paste0(out_basedir,"prot_vs_pheno_linear_noTP_gam_msigdb_enrichment_results.txt"), quote = F, sep = "\t", row.names = FALSE)
 
 
+#### Custom: Iceland prot - pheno associations
+input_data <- gam_res_lin 
+fold_change <- "est_noTP"
+
+enrichment_res <- data.frame()
+for (ph in unique(input_data$pheno)){
+  cat(ph, "\n")
+  subs <- input_data[input_data$pheno == ph, c("prot", fold_change)]
+  enrich_res <- run_enrichment_analysis_custom(subs)
+  if (nrow(enrich_res) > 0) {
+    enrichment_res <- rbind(enrichment_res, data.frame("Phenotype" = ph, enrich_res))
+  }
+}
+
+enrichment_res <- enrichment_res[enrichment_res$p.adjust < 0.05,]
+write.table(enrichment_res, file = paste0(out_basedir,"prot_vs_pheno_linear_noTP_gam_Iceland_assoc_enrichment_results.txt"), quote = F, sep = "\t", row.names = FALSE)
+
+
+
+
 ### Functions
 
 add_entrez_uniprot_ids <- function(subs) {
@@ -117,6 +141,16 @@ add_entrez_uniprot_ids <- function(subs) {
   return(df_for_enrich)
 }
 
+add_entrez_gene_names <- function(d, col_name) {
+   
+  entrez_ids <- AnnotationDbi::select(hs, 
+                                      keys = d[,col_name],
+                                      columns = c("ENTREZID", "SYMBOL"),
+                                      keytype = "SYMBOL")
+  d$entrez <- entrez_ids$ENTREZID
+  
+  return(d)
+}
 
 run_enrichment_analysis <- function(subs){
   
@@ -193,6 +227,29 @@ run_enrichment_analysis_msigdb <- function(subs, cat = 'H'){
 
   return(em)
 }
+
+
+run_enrichment_analysis_custom <- function(subs, fname = "/Users/Dasha/work/Sardinia/W4H/papers/iceland_somascan_signif_prot_pheno.txt"){
+  
+  gene_list <- abs(subs[,2])
+  names(gene_list) = as.character(subs[,1])
+  gene_list = sort(gene_list, decreasing = TRUE)
+  
+  db <- read.delim(fname, as.is = T, check.names = F, sep = "\t", header = F)
+  db <- db[,c(2,1)]
+  colnames(db) <- c("phenotype", "gene")
+  
+  enrich_res <- GSEA(gene_list, 
+             TERM2GENE = db, 
+             scoreType = "pos", 
+             pvalueCutoff = 0.1,
+             pAdjustMethod = "BH",
+             verbose = F)
+  enrich_res <- as_tibble(enrich_res@result)
+  
+  return(enrich_res)
+}
+
 
 
 ###############################################################################

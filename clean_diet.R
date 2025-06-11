@@ -1,5 +1,38 @@
 library(dplyr)
 
+setwd("/Users/Dasha/work/Sardinia/W4H/olink/")
+
+########
+## Format diet data
+########
+
+#diet <- read.delim("../phenotypes/DietFreeze_DataCleaned_Feb2025/FFQ_DIARI_ms.csv", as.is = T, sep = ",")
+diet <- read.delim("../phenotypes/DietFreeze_DataCleaned_Feb2025/FFQ_DIARI_3gg.csv", as.is = T, sep = ",")
+
+diet$ID <- sprintf("%03d", diet$ID)
+
+ffq <- diet[,c(1, grep("FFQ", colnames(diet)))]
+
+write.table(ffq, file = "../phenotypes/DietFreeze_DataCleaned_Feb2025/fmt_dasha/FFQ.txt", quote = F, sep = "\t", row.names = FALSE)
+
+diet_w <- diet[,-grep("FFQ", colnames(diet))]
+diet_l <- diet_w %>%
+  pivot_longer(
+    cols = -ID,
+    names_to = c(".value", "TP"),
+    names_sep = "g_"
+  ) %>%
+  mutate(TP = as.numeric(factor(TP, levels = c("first", "second", "third", "fourth"))))
+
+#write.table(diet_l, file = "../phenotypes/DietFreeze_DataCleaned_Feb2025/fmt_dasha/FFQ_DIARI_ms_long.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(diet_l, file = "../phenotypes/DietFreeze_DataCleaned_Feb2025/fmt_dasha/FFQ_DIARI_3gg_long.txt", quote = F, sep = "\t", row.names = FALSE)
+
+
+
+#
+# OLD
+#
+
 diet <- read.delim("FFQ_visit0.txt", as.is = T, check.names = F, sep = "\t", colClasses = c(record_id = "character"))
 
 colnames(diet) <- gsub("pane_consumo_sett", "pane_freq_sett", colnames(diet))

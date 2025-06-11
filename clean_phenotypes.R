@@ -30,7 +30,7 @@ batch_effects <- data.frame(matrix(nrow = ncol(d) - 3, ncol = 2))
 colnames(batch_effects) <- c("pheno", "batch_effect_pval")
 cnt <- 1
 for (ph in all_hormones){
-  subs <- d_matched_means[,c("Record.ID", "TP", ph, "Batch_hormones")]
+  subs <- d[,c("Record.ID", "TP", ph, "Batch_hormones")]
   colnames(subs)[3] <- 'pheno'
   lmm_fit <- lmer(pheno ~ TP + Batch_hormones + (1|Record.ID), data = subs)
   lmm_fit_0 <- lmer(pheno ~ TP + (1|Record.ID), data = subs)
@@ -41,7 +41,7 @@ for (ph in all_hormones){
 }
 batch_effects$batch_effect_pval <- as.numeric(batch_effects$batch_effect_pval)
 
-d <- cbind(d[,c("Record.ID", "TP", "Batch_hormones", "storage")], d[,4: (ncol(d) - 2)])
+d <- cbind(d[,c("Record.ID", "TP", "Batch_hormones", "storage")], d[,3: (ncol(d) - 2)])
 
 plot_list <- list()
 for (ph in all_hormones){
@@ -76,11 +76,11 @@ dev.off()
 
 
 #
-# Log-transform all pheno
+# Log-transform certain phenotypes
 #
-
+pheno_to_log <- c("Trigl", "AST", "ALT", "FSH", "INS","HOMA_B", "HOMA_IR", "LH", "PRL", "PROG", "X17BES" )
 d_log <- d
-d_log[, 5:ncol(d_log)] <- log(d[, 5:ncol(d_log)])
+d_log[, pheno_to_log] <- log(d[, pheno_to_log])
 
 
 #
@@ -122,6 +122,23 @@ d_matched_means$Batch_hormones <- NULL
 d_matched_means$storage <- NULL
 
 
+d_log$Batch_hormones <- NULL
+d_log$storage <- NULL
+d_log_rm_outliers4 <- remove_outliers_dataframe(d_log,  sd_cutoff = 4)$cleaned_data
+
+d_matched_means4 <- remove_outliers_dataframe(d_matched_means,  sd_cutoff = 5)$cleaned_data
+
+
+#
+# Write final tables 
+#
+write.table(d, file = "../../phenotypes/blood_pheno_13122024.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(d_log, file = "../../phenotypes/blood_pheno_13122024_log.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(d_matched_means, file = "../../phenotypes/blood_pheno_13122024_log_adj_batch_storage.txt", quote = F, sep = "\t", row.names = FALSE)
+
+write.table(d_log_rm_outliers4, file = "../../phenotypes/blood_pheno_13122024_log_rm_outiers_4sds.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(d_matched_means4, file = "../../phenotypes/blood_pheno_13122024_log_adj_batch_storage_rm_outiers_4sds.txt.txt", quote = F, sep = "\t", row.names = FALSE)
+
 
 make_equal_means <- function(pheno_with_batch, ph){
   b1 <- pheno_with_batch[pheno_with_batch$Batch_hormones == 'first', c("SampleID",  "Batch_hormones", ph)]
@@ -150,22 +167,6 @@ make_equal_means <- function(pheno_with_batch, ph){
   return (adjusted)
 }
 
-d_log$Batch_hormones <- NULL
-d_log$storage <- NULL
-d_log_rm_outliers4 <- remove_outliers_dataframe(d_log,  sd_cutoff = 4)$cleaned_data
-
-d_matched_means4 <- remove_outliers_dataframe(d_matched_means,  sd_cutoff = 5)$cleaned_data
-
-
-#
-# Write final tables 
-#
-write.table(d, file = "../../phenotypes/blood_pheno_13122024.txt", quote = F, sep = "\t", row.names = FALSE)
-write.table(d_log, file = "../../phenotypes/blood_pheno_13122024_log.txt", quote = F, sep = "\t", row.names = FALSE)
-write.table(d_matched_means, file = "../../phenotypes/blood_pheno_13122024_log_adj_batch_storage.txt", quote = F, sep = "\t", row.names = FALSE)
-
-write.table(d_log_rm_outliers4, file = "../../phenotypes/blood_pheno_13122024_log_rm_outiers_4sds.txt", quote = F, sep = "\t", row.names = FALSE)
-write.table(d_matched_means4, file = "../../phenotypes/blood_pheno_13122024_log_adj_batch_storage_rm_outiers_4sds.txt.txt", quote = F, sep = "\t", row.names = FALSE)
 
 
 
@@ -201,3 +202,25 @@ regress_covariates_lmm <- function(data, covar_data, covars_longitudinal = T){
   }
   return(d_adj)
 }
+
+
+remove_outliers_per_feature <- function(d, sd_cutoff = 4) {
+  zscore <- scale(d)  # Compute z-scores
+  d[abs(zscore) > sd_cutoff] <- NA  # Replace outliers with NA
+  return(d)
+}
+
+
+remove_outliers_dataframe <- function(df, sd_cutoff = 4) {
+  # Create a copy of the data frame to store the outlier mask
+  outlier_mask <- df %>%
+    mutate(across(.cols = -c(SampleID, ID, TP), .fns = ~abs(scale(.)) > sd_cutoff))
+  
+  # Apply the outlier removal
+  df_cleaned <- df %>%
+    mutate(across(.cols = -c(SampleID, ID, TP), .fns = ~remove_outliers_per_feature(., sd_cutoff)))
+  
+  # Return the cleaned data and the outlier mask
+  list(cleaned_data = df_cleaned, outlier_mask = outlier_mask)
+}
+

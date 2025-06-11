@@ -12,9 +12,9 @@ library(lme4)
 library(lmerTest)
 library(tidyverse)
 library(mgcv)
+library(ggtext)
 
-
-plot_together <- function(d_wide = NULL, pheno = NULL, prot, ph, annot = "", method = "poly3", scale = T, trajectories = NULL){
+plot_together <- function(d_wide = NULL, pheno = NULL, prot, ph, annot = "", method = "gam", scale = T, trajectories = NULL){
   if(! is.null(trajectories)){
     prot_name <- sym(prot)
     ph_name <- sym(ph)
@@ -78,6 +78,13 @@ plot_together <- function(d_wide = NULL, pheno = NULL, prot, ph, annot = "", met
       ) +
       scale_fill_manual(values = c(my_colors[c(2,3)])) + 
       scale_color_manual(values = c('darkgoldenrod4', 'deepskyblue4'))
+  } else if (method == 'gam'){
+    g <- ggplot(d_subs, aes(x = TP, y = prot)) +
+      geom_smooth(method = 'gam', formula=y ~ s(x, k = 4) , color = my_colors[2], aes(x = TP, y = pheno)) +  
+      geom_smooth(method = 'gam', formula=y ~ s(x, k = 4), color = my_colors[3], aes(x = TP, y = prot)) +  
+      labs(x = "Timepoint ", y = "", 
+           title = plot_title) +
+      theme_minimal()
   }
   g
   
@@ -119,20 +126,34 @@ plot_traj_many_prots2 <- function(prot_trajs = NULL, prots, colored = T, signif 
   g
 }
 
-plot_traj_prots_and_pheno <- function(d_wide, pheno, prots, ph, title = ""){
+plot_traj_prots_and_pheno <- function(d_wide, pheno, prots, ph, title = "", method = 'gam', prot_trajs = NULL, ph_trajs = NULL){
   #tmp <- as.data.frame(t(apply(prot_trajs[prots,], 1, scale)))
   
-  res_trajs <- data.frame(matrix(nrow = length(prots) + 1, ncol = 101))
-  ph_fit <- fit_lmm_poly3_adj_covar(pheno, ph, n = 100, covariates, scale = T)
-  res_trajs[1,] <- c("pheno", ph_fit$predicted)
-  
-  cnt <- 2
-  for (prot in prots){
-    fit <- fit_lmm_poly3_adj_covar(d_wide, prot, n = 100, covariates, scale = T)
-    res_trajs[cnt,] <- c(prot, fit$predicted)
-    cnt <- cnt + 1
+  if (!is.null(prot_trajs)) {
+    res_trajs <- rbind(ph_trajs, prot_trajs) %>%
+      rownames_to_column(var = 'feature')
+    
+    res_trajs[1, "feature"] <- "pheno"
+  } else {
+    res_trajs <- data.frame(matrix(nrow = length(prots) + 1, ncol = 101))
+    ph_fit <- fit_lmm_poly3_adj_covar(pheno, ph, n = 100, covariates, scale = T)
+    res_trajs[1,] <- c("pheno", ph_fit$predicted)
+    
+    cnt <- 2
+    for (prot in prots){
+      if (method == 'lmm') {
+        fit <- fit_lmm_poly3_adj_covar(d_wide, prot, n = 100, covariates, scale = T)
+      } else if (method == 'gam') {
+        fit <- gam_prot_tp_adj_covar(d_wide, prot, covariates, scale = T, predict = T)
+      } else {
+        stop("Error! Wrong method, should be gam or lmm.")
+      }
+      res_trajs[cnt,] <- c(prot, fit$predicted)
+      cnt <- cnt + 1
+    }
+    colnames(res_trajs) <- c("feature", seq(1,4, length.out = 100))
+      
   }
-  colnames(res_trajs) <- c("feature", seq(1,4, length.out = 100))
   d_subs <- res_trajs %>%
     pivot_longer(cols = -feature,names_to = 'TP')
   
@@ -469,7 +490,7 @@ gam_prot_tp_adj_covar <- function(d_wide, prot, covariates, scale = F, rm_outlie
   fo_gam <- as.formula(paste("prot ~ s(TP, k = 4) + s(ID,  bs = 're') + ", paste(colnames(covariates)[-1], collapse = "+")))
   fo_gam_null <- as.formula(paste("prot ~ s(ID,  bs = 're') + ", paste(colnames(covariates)[-1], collapse = "+")))
   
-  model <- gam(fo_gam, data = d_subs, , method = 'REML')
+  model <- gam(fo_gam, data = d_subs,  method = 'REML')
   if (anova_pval){
     model0 <- gam(fo_gam_null, data = d_subs, method = 'REML')
     an <- anova.gam(model, model0)
@@ -489,10 +510,9 @@ gam_prot_tp_adj_covar <- function(d_wide, prot, covariates, scale = F, rm_outlie
       predicted = NA
     ) %>%
       bind_cols(
-        covar_means %>%
-          slice(1)   # to use the first row of covar_means
+        covar_means[1,] 
       )
-    predictions <- predict(model, newdata = new_data,  exclude = "s(ID)", se.fit = T)
+    predictions <- predict.gam(model, newdata = new_data,  exclude = "s(ID)", se.fit = T)
     new_data$predicted <- predictions$fit
     new_data$SE <- predictions$se.fit
     new_data$lower <- new_data$predicted - 1.96 * new_data$SE
@@ -506,7 +526,7 @@ gam_prot_tp_adj_covar <- function(d_wide, prot, covariates, scale = F, rm_outlie
 }
 
 
-gam_prot_pheno_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale = F, rm_outliers = F, adjust_timepoint = 'linear', adjust_pheno = 'spline', anova_pval = F){
+gam_prot_pheno_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale = F, rm_outliers = F, adjust_timepoint = 'spline', adjust_pheno = 'linear', anova_pval = F, predict = F, add_age_interaction = F){
   if(! "TP" %in% colnames(covariates) ){
     d_subs <- inner_join(inner_join(d_wide[,c("SampleID", "ID", "TP", prot)], pheno[,c("SampleID" ,ph)], by = c("SampleID")),
                          covariates, by = c("ID"))
@@ -538,6 +558,12 @@ gam_prot_pheno_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale 
     stop ("Wrong adjust_timepoint argument. Should be one of spline, linear or none.")
   }
   
+  if (add_age_interaction) {
+    if (! "Age" %in% colnames(d_subs)) {cat ("No Age covariate provided for the interaction!\n")}
+    fo_gam <- paste0(fo_gam, " + pheno * Age")
+    d_subs$Age <- scale(d_subs$Age)
+  }
+  
   # Linear relation between protein and phenotype
   if (adjust_pheno != 'spline'){
     fo_gam <- gsub("s\\(pheno\\)", "pheno", fo_gam)
@@ -547,6 +573,11 @@ gam_prot_pheno_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale 
     est <- summary(model)$p.table["pheno","Estimate"]
     se <- summary(model)$p.table["pheno","Std. Error"]
     pval <- summary(model)$p.table["pheno","Pr(>|t|)"]
+    
+    if (add_age_interaction) {
+      interaction_pval <- summary(model)$p.table["pheno:Age","Pr(>|t|)"]
+      return(list(pval = pval,  est = est, se = se, n = nrow(d_subs), n_samples = length(unique(d_subs$ID)), age_inter_pval = interaction_pval))
+    } 
     return(list(pval = pval,  est = est, se = se, n = nrow(d_subs), n_samples = length(unique(d_subs$ID))))
   }
   
@@ -577,7 +608,7 @@ gam_prot_pheno_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale 
         covar_means %>%
           slice(1)   # to use the first row of covar_means
       )
-    predictions <- predict(model, newdata = new_data,  exclude = "s(ID)", se.fit = T)
+    predictions <- predict.gam(model, newdata = new_data,  exclude = "s(ID)", se.fit = T)
     new_data$predicted <- predictions$fit
     new_data$SE <- predictions$se.fit
     new_data$lower <- new_data$predicted - 1.96 * new_data$SE
@@ -635,8 +666,17 @@ get_ICC <- function(d_wide, prot){
    d_subs <- na.omit(d_subs)
    d_subs$prot <- scale(d_subs$prot)
    
-   m <- lmer(prot ~ 1 + (1|ID), data = d_subs)
-   return (as.numeric(VarCorr( m )$ID))
+   m <- lmer(prot ~ 1 + TP + (1|ID), data = d_subs)
+   
+   vc <- as.data.frame(VarCorr(m))
+   var_ID <- vc$vcov[vc$grp == "ID"]  # Variance due to random effect (ID)
+   var_residual <- vc$vcov[vc$grp == "Residual"]  # Residual variance
+   total_var <- var_ID + var_residual  # Total variance (excluding fixed effects)
+   prop_ID <- var_ID / total_var  # Proportion of variance explained by ID
+   
+   R2m <- performance::r2(m)$R2_marginal
+   
+   return (list(ICC = prop_ID, var_tp = R2m))
 }
  
 # get_AUC_difference <- function(traj1, traj2, n_points = 500) {
@@ -1003,7 +1043,7 @@ regress_covariates_lmm <- function(data, covar_data, covars_longitudinal = T){
     
     
     lmm_fit <- lmer(fo_lmm, data = subs)
-    subs[,ph] <- subs$pheno - predict(lmm_fit, re.form = NA)
+    subs[,ph] <- subs$pheno - lme4:::predict.merMod(lmm_fit, re.form = NA)
     
     d_adj <- left_join(d_adj, subs[, c("SampleID", ph)], by = "SampleID")
   }

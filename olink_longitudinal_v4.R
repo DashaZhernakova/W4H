@@ -10,6 +10,7 @@ library(grid)
 library(gridExtra)
 library(pheatmap)
 library(corrplot)
+library(patchwork)
 
 out_basedir <- "results/pheno_batch2_prot_rm_outliers_4sd/"
 d_wide <- read.delim("data/olink_clean_CVD+INF_rm_outliers_4sd.txt", as.is = T, check.names = F, sep = "\t", colClasses = c(ID = "character"))
@@ -40,12 +41,12 @@ write.table(d_wide_adj_covar, file = paste0(out_basedir, "olink_clean_CVD+INF_ad
 # ICC for each protein
 ################################################################################
 
-icc <- data.frame(matrix(nrow = (ncol(d_wide) -4), ncol = 2))
-colnames(icc) <- c("prot", "ICC")
+icc <- data.frame(matrix(nrow = (ncol(d_wide) -4), ncol = 3))
+colnames(icc) <- c("prot", "ICC", "R2_TP")
 cnt <- 1
 for (prot in colnames(d_wide)[4:ncol(d_wide)]){
   res <- get_ICC(d_wide, prot)
-  icc[cnt,] <- c(prot, res)
+  icc[cnt,] <- c(prot, unlist(res))
   cnt <- cnt + 1
 }
 
@@ -54,7 +55,7 @@ icc <- na.omit(icc) %>%
 icc <- icc[order(icc$ICC, decreasing = F),]
 
 cat("ICC ranges from", min(icc$ICC), "to", max(icc$ICC), "with a median of", median(icc$ICC), "\n")
-
+ggplot(icc, aes(x=ICC, y =R2_TP)) + geom_point() + theme_minimal() + xlab("ICC (variance explained by ID)") + ylab("Marginal R2 (var explained by visit)")
 
 write.table(icc, file = paste0(out_basedir, "ICC_per_protein.txt"), quote = F, sep = "\t", row.names = FALSE)
 
@@ -68,6 +69,9 @@ p2 <- ggplot(icc, aes(y = ICC)) +
   theme_minimal() +
   theme(axis.text.x=element_blank())
 p1 + p2
+
+ggplot(icc, aes(x=ICC, y =R2_TP)) + geom_point() + theme_minimal() + xlab("ICC (variance explained by ID)") + ylab("Marginal R2 (var explained by visit)")
+
 dev.off()
 
 ################################################################################
@@ -104,7 +108,74 @@ cat ("Number of proteins that change significantly with time:", nrow(signif), "\
 cat("Of them, the number of proteins with a non-linear change: ", nrow(signif[signif$gam_edf_round > 1,]), "\n")
 cat("Of them, the number of proteins showing a significant association with time also in LMMs:", nrow(signif[signif$lmm_BH_pval < 0.05,]))
 
+
 ################################################################################
+# Hormonal phases instead of TP
+################################################################################
+phase <- read.delim("../phenotypes/phase_hormonal_based_LH.csv", as.is = T, sep = ",", check.names = F)
+phase$Code <- gsub("X", "", phase$Code)
+phase[,1] <- NULL
+d_wide_phases <- inner_join(phase, d_wide, by = c("Code" = "SampleID"))
+d_wide_phases$TP <- NULL
+colnames(d_wide_phases) <- gsub("Code", "SampleID",colnames(d_wide_phases))
+colnames(d_wide_phases) <- gsub("Phase", "TP",colnames(d_wide_phases))
+
+gam_res_prot_phase <- data.frame(matrix(nrow = (ncol(d_wide_phases) -4), ncol = 7))
+colnames(gam_res_prot_phase) <- c("prot", "gam_pval", "gam_edf", "gam_fval", "n", "n_samples", "lmm_pval")
+
+cnt <- 1
+for (prot in colnames(d_wide_phases)[4:ncol(d_wide_phases)]){
+  res_gam <- gam_prot_tp_adj_covar(d_wide_phases, prot, covariates, scale = T, predict = F)
+  res_lmm <- lmm_prot_tp_poly3_adj_covar(d_wide_phases, prot, covariates)
+  gam_res_prot_phase[cnt,] <- c(prot, unlist(res_gam), res_lmm)
+  cnt <- cnt + 1
+}
+gam_res_prot_phase <- na.omit(gam_res_prot_phase) %>%
+  mutate(across(-c( prot), as.numeric)) 
+
+gam_res_prot_phase$gam_BH_pval <- p.adjust(gam_res_prot_phase$gam_pval, method = 'BH')
+gam_res_prot_phase$lmm_BH_pval <- p.adjust(gam_res_prot_phase$lmm_pval, method = 'BH')
+
+gam_res_prot_phase <- gam_res_prot_phase[order(gam_res_prot_phase$gam_pval),]
+gam_res_prot_phase$gam_bonf_sign <- ifelse(gam_res_prot_phase$gam_pval < 0.05/38,T,F)
+gam_res_prot_phase$gam_edf_round <- round(gam_res_prot_phase$gam_edf)
+gam_res_prot_phase$gam_BH_sign <- ifelse(gam_res_prot_phase$gam_BH_pval < 0.05,T,F)
+
+write.table(gam_res_prot_phase, file = paste0(out_basedir, "prot_vs_phase_gam_adj_age_bmi_preg_storage.txt"), quote = F, sep = "\t", row.names = FALSE)
+
+
+tmp <- full_join(gam_res_prot_tp, gam_res_prot_phase, by = 'prot')
+bh_x <- max(tmp[tmp$gam_BH_pval.x < 0.05,"gam_pval.x"])
+bh_y <- max(tmp[tmp$gam_BH_pval.y < 0.05,"gam_pval.y"])
+ggplot(tmp, aes(x = -1*log10(gam_pval.x), y = -1*log10(gam_pval.y))) + 
+  geom_point() + 
+  geom_vline(xintercept = -1*log10(bh_x), color = 'blue') + 
+  geom_hline(yintercept = -1*log10(bh_y), color = 'blue') +
+  theme_minimal() + 
+  xlab("Prot vs visit") + ylab("Prot vs phase") + 
+  ggtitle("-log10(P) GAM: prot ~ time + covariates")
+
+tmp$logp.x <- -1*log10(tmp$gam_pval.x)
+tmp$logp.y <- -1*log10(tmp$gam_pval.y)
+
+sig_x <- tmp$prot[tmp$gam_BH_pval.x < 0.05]
+sig_y <- tmp$prot[tmp$gam_BH_pval.y < 0.05]
+
+# Create a named list for ggvenn
+venn_data <- list(
+  "protein vs visit" = sig_x,
+  "protein vs phase" = sig_y
+)
+
+# Create the Venn diagram
+ggvenn(venn_data, 
+       fill_color = my_colors[c(2,3)],
+       stroke_size = 0.5, 
+       set_name_size = 8,
+       text_size = 8) 
+  
+
+####################NULL################################################################################
 # Cluster longitudinal trajectories: GAM
 ################################################################################
 
@@ -486,6 +557,10 @@ all_pheno <- colnames(pheno)[4:ncol(pheno)]
 gam_res_pheno_tp <- data.frame(matrix(nrow = length(all_pheno), ncol = 7))
 colnames(gam_res_pheno_tp) <- c("pheno", "gam_pval", "gam_edf", "gam_fval", "n", "n_samples", "lmm_pval")
 
+pheno_trajs <- data.frame(matrix(nrow = length(all_pheno) , ncol = n_points))
+row.names(pheno_trajs) <- all_pheno
+colnames(pheno_trajs) <- seq(1,4, length.out = n_points)
+
 plot_list <- list()
 cnt <- 1
 for (ph in all_pheno){
@@ -494,6 +569,7 @@ for (ph in all_pheno){
   gam_res_pheno_tp[cnt,] <- c(ph, unlist(res_gam[1:5]), res_lmm)
   cnt <- cnt + 1
   
+  pheno_trajs[ph,] <- res_gam$predicted
   traj <- data.frame(TP = seq(1,4, length.out = length(res_gam$predicted)), pheno = res_gam$predicted, lower = res_gam$lower, upper = res_gam$upper)
   traj <- full_join(pheno_adjusted[,c("TP", "ID", ph)], traj, by = "TP")
   colnames(traj)[3] <- "values"
@@ -507,7 +583,7 @@ for (ph in all_pheno){
     ggtitle(paste0(ph, "; GAM P = ", formatC(res_gam$pval, digits = 3))) + 
     theme_minimal() 
 }
-pdf(paste0(out_basedir,"/plots/lipids_hormones_gam_withpoints.pdf"), height = 15, width = 15)
+pdf(paste0(out_basedir,"/plots/lipids_hormones_gam_withpoints_2.pdf"), height = 10, width = 10)
 grid.arrange(grobs = plot_list, ncol = 4, nrow = 4)  
 dev.off()
 
@@ -522,6 +598,8 @@ gam_res_pheno_tp$gam_edf_round <- round(gam_res_pheno_tp$gam_edf)
 gam_res_pheno_tp$gam_BH_sign <- ifelse(gam_res_pheno_tp$gam_BH_pval < 0.05,T,F)
 
 write.table(gam_res_pheno_tp, file = paste0(out_basedir, "pheno_vs_tp_gam_adj_age_bmi_preg.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(pheno_trajs, file = paste0(out_basedir, "pheno_traj_gam.txt"), quote = F, sep = "\t", col.names = NA, row.names = T)
+
 
 ################################################################################
 # GAM protein vs phenotype 
@@ -646,7 +724,113 @@ tmp[tmp[,paste0("BH_pval_", gr1, ".x")] < 0.05 & tmp[,paste0("BH_pval_", gr2, ".
 cat("BH significant in group 2, but not in group 1:\n")
 tmp[tmp[,paste0("BH_pval_", gr1, ".x")] > 0.05 & tmp[,paste0("BH_pval_", gr2, ".y")] < 0.05, c("prot", "pheno")]
 
+pdf(paste0(out_basedir, "plots/prot_vs_pheno_linear_gam_with_without_spline_TP.pdf"))
+ggplot(gam_res_lin, aes(x=est_spline, y = est_noTP)) + geom_point() + theme_minimal() + xlab("estimate, adjusting for visit") + ylab("estimate, no adjustment for visit")
+dev.off()
+
+#### Heatmaps ####
+
+# spline TP #
+library(RColorBrewer)
+gam_res_lin <- read.delim(paste0(out_basedir, "prot_vs_pheno_linear_gam_adj_covar.txt"), as.is = T, check.names = T, sep = "\t")
+prot_subs <- gam_res_lin[gam_res_lin$BH_pval_spline < 0.1, "prot"]
+gam_res_lin_wide <- my_pivot_wider(gam_res_lin[gam_res_lin$prot %in% prot_subs,], "pheno", "prot", "est_spline")
+signif_labels <- my_pivot_wider(gam_res_lin[gam_res_lin$prot %in% prot_subs,], "pheno", "prot", "BH_pval_spline")
+signif_labels <- ifelse(signif_labels < 0.05, "*", "")
+
+max_val <- max(abs(min(gam_res_lin_wide)), max(gam_res_lin_wide))
+breaksList = seq(-max_val, max_val, by = 0.01)
+colorList <- colorRampPalette(rev(brewer.pal(n = 11, name = "RdYlBu")))(length(breaksList))
+pheatmap(gam_res_lin_wide, display_numbers = signif_labels, fontsize_number = 14, 
+         color = colorList, breaks = breaksList,
+         filename = paste0(out_basedir, "plots/prot_vs_pheno_linear_gam_adj_covar_BH0.1.pdf"))
+dev.off()
+
+# no TP adjustment#
+prot_subs <- gam_res_lin[gam_res_lin$BH_pval_noTP < 0.1, "prot"]
+gam_res_lin_wide <- my_pivot_wider(gam_res_lin[gam_res_lin$prot %in% prot_subs,], "pheno", "prot", "est_noTP")
+signif_labels <- my_pivot_wider(gam_res_lin[gam_res_lin$prot %in% prot_subs,], "pheno", "prot", "BH_pval_noTP")
+signif_labels <- ifelse(signif_labels < 0.05, "*", "")
+
+max_val <- max(abs(min(gam_res_lin_wide)), max(gam_res_lin_wide))
+breaksList = seq(-max_val, max_val, by = 0.01)
+colorList <- colorRampPalette(rev(brewer.pal(n = 11, name = "RdYlBu")))(length(breaksList))
+pheatmap(gam_res_lin_wide, display_numbers = signif_labels, fontsize_number = 14, 
+         color = colorList, breaks = breaksList,fontsize_col = 7,
+         filename = paste0(out_basedir, "plots/prot_vs_pheno_linear_gam_adj_covar_noTP_BH0.1.pdf"))
+dev.off()
+
+
+################################################################################
+# Euclidean distance between protein and phenotype trajectories
+################################################################################
+
+pheno_trajs <- read.delim(paste0(out_basedir, "pheno_traj_gam.txt"), as.is = T, check.names = F, sep = "\t", row.names = 1)
+prot_trajs <- read.delim(paste0(out_basedir, "trajectories_gam/protein_trajectories_all_sign_prots.txt"), as.is = T, check.names = F, sep = "\t", row.names = 1)
+
+pheno_prot_dist <- data.frame(matrix(nrow = length(row.names(pheno_trajs)) * length(row.names(prot_trajs)), ncol = 3))
+colnames(pheno_prot_dist) <- c("pheno", "prot", "eucl")
+
+cnt <- 1
+for (ph in row.names(pheno_trajs)){
+  for (prot in row.names(prot_trajs)){
+    # Euclidean distance between trajectories
+    eucl_dist <- sum(abs(as.numeric(pheno_trajs[ph,]) - as.numeric(prot_trajs[prot,])))/length(pheno_trajs[ph,])
+    
+    pheno_prot_dist[cnt,] <- c(ph, prot, eucl_dist)
+    cnt <- cnt + 1
+  }
+}
+
+pheno_prot_dist <- na.omit(pheno_prot_dist) %>%
+  mutate(across(-c(pheno, prot), as.numeric)) 
+
+
+plot_list_top <- list()
+plot_list_bottom <- list()
+dist_metrics <- "eucl"
+for (ph in all_pheno) {
+  subs <- as.data.frame(pheno_prot_dist[pheno_prot_dist$pheno == ph ,])
+  
+  top <- subs[subs[, dist_metrics] < quantile(subs[, dist_metrics], 0.05), ]
+  bottom <- subs[subs[, dist_metrics] > quantile(subs[, dist_metrics], 0.95), ]
+  
+  plot_list_top[[ph]] <- plot_traj_prots_and_pheno(d_wide, pheno, top$prot, ph, title = ph, ph_trajs = pheno_trajs[ph,], prot_trajs = prot_trajs[top$prot,])
+  plot_list_bottom[[ph]] <- plot_traj_prots_and_pheno(d_wide, pheno, bottom$prot, ph, title = ph, ph_trajs = pheno_trajs[ph,], prot_trajs = prot_trajs[top$prot,])
+}
+pdf(paste0(out_basedir, "trajectories_gam/pheno_prot_", dist_metrics, "_top_q0.05.pdf"), height = 15, width = 15)
+grid.arrange(grobs = plot_list_top, ncol = 4, nrow = 4)  
+dev.off()
+
+pdf(paste0(out_basedir, "trajectories_gam/pheno_prot_", dist_metrics, "_bottom_q0.05.pdf"), height = 15, width = 15)
+grid.arrange(grobs = plot_list_bottom, ncol = 4, nrow = 4)  
+dev.off()
+
+
+################################################################################
+# Protein - phenotype associations with interaction with age
+################################################################################
 
 
 
+gam_res <- data.frame(matrix(nrow = (ncol(d_wide) -4) * (ncol(pheno) -4), ncol = 8))
+colnames(gam_res) <- c("prot", "pheno", "pval", "est", "se", "n", " n_samples", "interaction_pval")
 
+cnt <- 1
+for (ph in colnames(pheno)[4:ncol(pheno)]) {
+  cat(ph, "\n")
+  for (prot in colnames(d_wide)[4:ncol(d_wide)]){
+    res_gam <- gam_prot_pheno_adj_covar(d_wide, pheno, prot, ph, covariates, scale = T, adjust_timepoint = 'spline', adjust_pheno = 'linear', anova_pval = F, add_age_interaction = T)
+    gam_res[cnt,] <- c(prot, ph, unlist(res_gam))
+    cnt <- cnt + 1
+  }
+}
+
+gam_res <- na.omit(gam_res) %>%
+  mutate(across(-c(pheno, prot), as.numeric)) 
+
+
+write.table(gam_res, file = paste0(out_basedir, "prot_vs_pheno_linear_gam_adj_covar_interaction_with_age.txt"), quote = F, sep = "\t", row.names = FALSE)
+
+  
+  
